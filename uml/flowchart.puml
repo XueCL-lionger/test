@@ -1,0 +1,114 @@
+@startuml flowchart
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam ActivityBackgroundColor #F6F8FA
+skinparam ActivityBorderColor #D0D7DE
+skinparam ActivityFontColor #1F2328
+skinparam DiamondBackgroundColor #F6F8FA
+skinparam DiamondBorderColor #0969DA
+skinparam DiamondFontColor #0969DA
+skinparam ArrowColor #57606A
+skinparam NoteBackgroundColor #FFF8C5
+skinparam NoteBorderColor #E3B341
+skinparam NoteFontColor #1F2328
+
+title 四层权限管道 - 决策流程图 (Flowchart)
+
+start
+:调用方发起 **check(tool_call, history)**;
+:初始化 PipelineResult\n记录开始时间;
+
+partition "第一层: RuleMatcher (<1ms)" #DDF4FF {
+    if (fnmatch 匹配 deny 规则?) then (是)
+        :记录 DENY: 命中拒绝规则;
+        :计算总延迟，写入 decision_log;
+        :返回 PipelineResult(**DENY**);
+        stop
+    elseif (fnmatch 匹配 allow 规则?) then (是)
+        :记录 ALLOW: 命中允许规则;
+        :计算总延迟，写入 decision_log;
+        :返回 PipelineResult(**ALLOW**);
+        stop
+    else (否)
+        :PASS: 未匹配任何规则;
+    endif
+}
+
+partition "第二层: BashClassifier (~1ms)" #FFF8C5 {
+    if (工具名 == Bash?) then (否)
+        :PASS: 非 Bash 命令，跳过;
+    else (是)
+        if (22+ 预编译正则\n匹配到危险模式?) then (是)
+            :记录 DENY: 检测到危险操作\n[destructive_delete | force_git |\nproduction_deploy | database_destructive |\npermission_change | network_sensitive |\nsystem_modify | credential_exposure];
+            :计算总延迟，写入 decision_log;
+            :返回 PipelineResult(**DENY**);
+            stop
+        else (否)
+            :PASS: 未检测到已知危险模式;
+        endif
+    endif
+}
+
+partition "第三层: TranscriptClassifier (~5ms)" #FBEFFF {
+    if (只读操作?\nRead/Grep/Glob/WebSearch/WebFetch) then (是)
+        :ALLOW: 只读操作，安全;
+        :计算总延迟，写入 decision_log;
+        :返回 PipelineResult(**ALLOW**);
+        stop
+    elseif (对话上下文包含\n危险信号 + 修改操作?) then (是)
+        :记录 DENY:\n危险信号 (生产环境/线上/敏感)\n+ 修改操作 (Bash/Write/Edit);
+        :计算总延迟，写入 decision_log;
+        :返回 PipelineResult(**DENY**);
+        stop
+    elseif (对话上下文包含\n安全信号 + 修改操作?) then (是)
+        :ALLOW: 安全信号 (测试环境/sandbox/debug)\n判定为测试/调试场景;
+        :计算总延迟，写入 decision_log;
+        :返回 PipelineResult(**ALLOW**);
+        stop
+    else (否)
+        :PASS: 上下文信息不足;
+    endif
+}
+
+partition "第四层: ModelSafety (50~200ms)" #FFEFF0 {
+    :模拟 LLM API 调用\n(延迟 50~200ms);
+    :计算风险评分 score;
+
+    if (score >= 0.5?) then (是)
+        :记录 DENY: 模型判定为高风险;
+        :计算总延迟，写入 decision_log;
+        :返回 PipelineResult(**DENY**);
+        stop
+    else (否)
+        :ALLOW: 模型判定为低风险;
+        :计算总延迟，写入 decision_log;
+        :返回 PipelineResult(**ALLOW**);
+        stop
+    endif
+}
+
+' 兜底逻辑
+floating note left
+  **默认拒绝原则**
+  若四层均返回 PASS
+  则安全起见自动 DENY
+end note
+
+legend right
+  |= 图例 |= 说明 |
+  | <color:#D0D7DE>▬▬</color> | 矩形 = 处理步骤 |
+  | <color:#0969DA>◆</color> | 菱形 = 判断/条件分支 |
+  | <color:#1A7F37>■</color> | 绿色 = ALLOW (允许) |
+  | <color:#CF222E>■</color> | 红色 = DENY (拒绝) |
+  | <color:#BF8700>■</color> | 黄色 = PASS (传递) |
+  |= 分区颜色 |= 层级 |
+  | <color:#DDF4FF>■</color> | 第一层: RuleMatcher (<1ms) |
+  | <color:#FFF8C5>■</color> | 第二层: BashClassifier (~1ms) |
+  | <color:#FBEFFF>■</color> | 第三层: TranscriptClassifier (~5ms) |
+  | <color:#FFEFF0>■</color> | 第四层: ModelSafety (50~200ms) |
+  |= 短路规则 | |
+  | 任意层返回 ALLOW/DENY | 管道立即终止 |
+  | 四层均返回 PASS | 默认 DENY (安全优先) |
+endlegend
+
+@enduml

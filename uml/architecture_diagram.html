@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Code 四层权限管道 - 架构图</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: #1a1b26;
+            color: #c0caf5;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #24283b 0%, #1a1b26 100%);
+            border-bottom: 1px solid #3b4261;
+            padding: 40px 20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #7aa2f7;
+            margin-bottom: 8px;
+            letter-spacing: 1px;
+        }
+
+        .header p {
+            font-size: 1rem;
+            color: #a9b1d6;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        .diagram-section {
+            margin-bottom: 60px;
+        }
+
+        .diagram-section h2 {
+            font-size: 1.4rem;
+            color: #7aa2f7;
+            margin-bottom: 6px;
+            padding-left: 12px;
+            border-left: 3px solid #7aa2f7;
+        }
+
+        .diagram-section .subtitle {
+            font-size: 0.9rem;
+            color: #565f89;
+            margin-bottom: 24px;
+            padding-left: 16px;
+        }
+
+        .mermaid-wrapper {
+            background: #24283b;
+            border-radius: 12px;
+            border: 1px solid #3b4261;
+            padding: 32px;
+            overflow-x: auto;
+        }
+
+        .mermaid {
+            display: flex;
+            justify-content: center;
+        }
+
+        .mermaid svg {
+            max-width: 100%;
+        }
+
+        .legend {
+            margin-top: 30px;
+            background: #1f2335;
+            border-radius: 8px;
+            padding: 20px 24px;
+            border: 1px solid #3b4261;
+        }
+
+        .legend h3 {
+            font-size: 1rem;
+            color: #bb9af7;
+            margin-bottom: 12px;
+        }
+
+        .legend-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 10px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.85rem;
+            color: #a9b1d6;
+        }
+
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            flex-shrink: 0;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 30px 20px;
+            color: #565f89;
+            font-size: 0.8rem;
+            border-top: 1px solid #3b4261;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.5rem;
+            }
+            .mermaid-wrapper {
+                padding: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>Claude Code 四层权限管道 - 架构图</h1>
+    <p>四层递进式安全决策管道：规则匹配 -> Bash 分类 -> 上下文分析 -> 模型安全分类</p>
+</div>
+
+<div class="container">
+
+    <!-- ============================================ -->
+    <!-- Class Diagram                                -->
+    <!-- ============================================ -->
+    <div class="diagram-section">
+        <h2>类图 (Class Diagram)</h2>
+        <p class="subtitle">展示所有核心数据结构、枚举、分类器继承关系及管道编排器的组合结构</p>
+        <div class="mermaid-wrapper">
+            <div class="mermaid">
+classDiagram
+    direction TB
+
+    class Decision {
+        &lt;&lt;enumeration&gt;&gt;
+        ALLOW = "allow"
+        DENY = "deny"
+        PASS = "pass"
+    }
+
+    class RiskLevel {
+        &lt;&lt;enumeration&gt;&gt;
+        LOW = "low"
+        MEDIUM = "medium"
+        HIGH = "high"
+        CRITICAL = "critical"
+    }
+
+    class ToolCall {
+        &lt;&lt;dataclass&gt;&gt;
+        +name: str
+        +command: str
+        +risk_level: RiskLevel = LOW
+        +MAX_COMMAND_LENGTH: int = 100000
+        +__post_init__() None
+        +is_read_only() bool
+        +is_destructive() bool
+    }
+
+    class DecisionResult {
+        &lt;&lt;dataclass&gt;&gt;
+        +layer: str
+        +decision: Decision
+        +reason: str = ""
+        +latency_ms: float = 0.0
+    }
+
+    class PipelineResult {
+        &lt;&lt;dataclass&gt;&gt;
+        +tool_call: ToolCall
+        +layers_checked: list~DecisionResult~
+        +final_decision: Decision = PASS
+        +total_latency_ms: float = 0.0
+        +reason: str = ""
+    }
+
+    class BaseClassifier {
+        &lt;&lt;abstract&gt;&gt;
+        +layer_name: str &lt;&lt;abstract property&gt;&gt;
+        +decide(tool_call: ToolCall, conversation_history: list~str~|None) DecisionResult
+        #_do_decide(tool_call: ToolCall, context: str) DecisionResult &lt;&lt;abstract&gt;&gt;
+    }
+
+    class RuleMatcher {
+        -allow_rules: list~str~
+        -deny_rules: list~str~
+        +layer_name: str
+        #_do_decide(tool_call: ToolCall, context: str) DecisionResult
+    }
+
+    class BashClassifier {
+        -_RAW_PATTERNS: dict~str, list~str~~
+        -_COMPILED_PATTERNS: list~tuple~str, Pattern~~
+        +layer_name: str
+        #_do_decide(tool_call: ToolCall, context: str) DecisionResult
+        -_ensure_compiled() list~tuple~str, Pattern~~
+    }
+
+    class TranscriptClassifier {
+        -_SAFE_CONTEXTS: tuple~str~
+        -_DANGEROUS_CONTEXTS: tuple~str~
+        +layer_name: str
+        #_do_decide(tool_call: ToolCall, context: str) DecisionResult
+    }
+
+    class ModelSafetyClassifier {
+        +HIGH_RISK_COMMANDS: frozenset~str~
+        +HIGH_RISK_TARGETS: frozenset~str~
+        -_FORCE_PATTERN: Pattern
+        -_DANGER_CONTEXT_KEYWORDS: tuple~str~
+        +layer_name: str
+        #_do_decide(tool_call: ToolCall, context: str) DecisionResult
+    }
+
+    class PermissionPipeline {
+        +layers: list~BaseClassifier~
+        +decision_log: list~PipelineResult~
+        +__init__() None
+        +add_layer(classifier: BaseClassifier, index: int|None) None
+        +remove_layer(layer_name: str) None
+        +check(tool_call: ToolCall, conversation_history: list~str~|None) PipelineResult
+        +print_decision(result: PipelineResult) None
+        +get_statistics() dict
+    }
+
+    %% Inheritance: concrete classifiers extend BaseClassifier
+    BaseClassifier &lt;|-- RuleMatcher : 继承
+    BaseClassifier &lt;|-- BashClassifier : 继承
+    BaseClassifier &lt;|-- TranscriptClassifier : 继承
+    BaseClassifier &lt;|-- ModelSafetyClassifier : 继承
+
+    %% Composition: PermissionPipeline owns classifiers
+    PermissionPipeline *-- BaseClassifier : layers 包含
+
+    %% Associations: data structures
+    PipelineResult --> ToolCall : tool_call
+    PipelineResult --> DecisionResult : layers_checked
+    ToolCall --> RiskLevel : risk_level
+    DecisionResult --> Decision : decision
+    PipelineResult --> Decision : final_decision
+
+    %% Classifier produces DecisionResult
+    BaseClassifier ..> DecisionResult : 创建
+    BaseClassifier ..> ToolCall : 使用
+            </div>
+        </div>
+
+        <div class="legend">
+            <h3>图例说明</h3>
+            <div class="legend-grid">
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#7aa2f7"></div>
+                    <span>实线三角箭头 (继承): 四个具体分类器继承 BaseClassifier</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#bb9af7"></div>
+                    <span>实线菱形 (组合): Pipeline 拥有分类器实例</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#9ece6a"></div>
+                    <span>实线箭头 (关联): PipelineResult 包含 ToolCall / DecisionResult</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#e0af68"></div>
+                    <span>虚线箭头 (依赖): 分类器创建 DecisionResult 并使用 ToolCall</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- Sequence Diagram                             -->
+    <!-- ============================================ -->
+    <div class="diagram-section">
+        <h2>时序图 (Sequence Diagram)</h2>
+        <p class="subtitle">展示一次典型权限检查请求在四层管道中的完整决策流程</p>
+        <div class="mermaid-wrapper">
+            <div class="mermaid">
+sequenceDiagram
+    autonumber
+    actor 调用方
+    participant PP as PermissionPipeline
+    participant RM as RuleMatcher<br/>第一层: 规则匹配
+    participant BC as BashClassifier<br/>第二层: Bash分类
+    participant TC as TranscriptClassifier<br/>第三层: 上下文分析
+    participant MS as ModelSafetyClassifier<br/>第四层: 模型安全
+
+    调用方 ->> PP: check(tool_call, conversation_history)
+    activate PP
+
+    Note over PP: 初始化 PipelineResult<br/>记录开始时间
+
+    %% Layer 1
+    PP ->> RM: decide(tool_call, history)
+    activate RM
+    Note right of RM: deny 优先于 allow<br/>使用 fnmatch 通配符匹配
+    RM -->> PP: DecisionResult(PASS, "未匹配任何规则")
+    deactivate RM
+
+    Note over PP: PASS -> 继续下一层
+
+    %% Layer 2
+    PP ->> BC: decide(tool_call, history)
+    activate BC
+    Note right of BC: 仅检查 Bash 工具<br/>22+ 种预编译正则模式
+    BC -->> PP: DecisionResult(PASS, "未检测到危险模式")
+    deactivate BC
+
+    Note over PP: PASS -> 继续下一层
+
+    %% Layer 3
+    PP ->> TC: decide(tool_call, history)
+    activate TC
+    Note right of TC: 只读操作直接 ALLOW<br/>否则检查上下文信号
+    TC -->> PP: DecisionResult(ALLOW, "上下文包含安全信号")
+    deactivate TC
+
+    Note over PP: ALLOW -> 管道终止
+
+    %% Final
+    PP ->> PP: 计算总延迟<br/>记录 decision_log
+    PP -->> 调用方: PipelineResult(final=ALLOW, reason, latency)
+    deactivate PP
+
+    Note over 调用方,MS: 若四层均 PASS, 则默认 DENY (安全优先)
+            </div>
+        </div>
+
+        <div class="legend">
+            <h3>决策流程说明</h3>
+            <div class="legend-grid">
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#9ece6a"></div>
+                    <span>ALLOW: 当前层判定安全, 管道提前终止, 不再执行后续层</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#f7768e"></div>
+                    <span>DENY: 当前层判定危险, 管道提前终止, 拒绝执行</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#e0af68"></div>
+                    <span>PASS: 当前层无法决策, 请求传递到下一层继续判断</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#565f89"></div>
+                    <span>默认拒绝: 四层均 PASS 时, 安全起见自动 DENY</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- Layer Performance Diagram                    -->
+    <!-- ============================================ -->
+    <div class="diagram-section">
+        <h2>层级性能与职责对比 (Layer Comparison)</h2>
+        <p class="subtitle">四层分类器在响应速度、检查范围和决策依据上的差异</p>
+        <div class="mermaid-wrapper">
+            <div class="mermaid">
+block-beta
+    columns 4
+    block:L1:1
+        columns 1
+        L1Title["**第一层: RuleMatcher**"]
+        L1Speed["延迟: <1ms"]
+        L1Method["方法: fnmatch 通配符"]
+        L1Scope["范围: 用户配置规则"]
+    end
+    block:L2:1
+        columns 1
+        L2Title["**第二层: BashClassifier**"]
+        L2Speed["延迟: ~1ms"]
+        L2Method["方法: 预编译正则匹配"]
+        L2Scope["范围: 22+ 危险模式"]
+    end
+    block:L3:1
+        columns 1
+        L3Title["**第三层: TranscriptClassifier**"]
+        L3Speed["延迟: ~5ms"]
+        L3Method["方法: 上下文信号检测"]
+        L3Scope["范围: 对话历史语义"]
+    end
+    block:L4:1
+        columns 1
+        L4Title["**第四层: ModelSafetyClassifier**"]
+        L4Speed["延迟: 50-200ms"]
+        L4Method["方法: 模拟 LLM 推理"]
+        L4Scope["范围: 综合风险评估"]
+    end
+
+    L1 --> L2 --> L3 --> L4
+    style L1Title fill:#9ece6a,stroke:#73daca,color:#1a1b26
+    style L2Title fill:#e0af68,stroke:#d19a66,color:#1a1b26
+    style L3Title fill:#7aa2f7,stroke:#5082c8,color:#1a1b26
+    style L4Title fill:#f7768e,stroke:#db4b4b,color:#1a1b26
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<div class="footer">
+    <p>Claude Code Permission Pipeline Architecture | Generated from permission_pipeline.py</p>
+</div>
+
+<script>
+    mermaid.initialize({
+        startOnLoad: true,
+        theme: 'dark',
+        themeVariables: {
+            primaryColor: '#3b4261',
+            primaryTextColor: '#c0caf5',
+            primaryBorderColor: '#7aa2f7',
+            lineColor: '#7aa2f7',
+            secondaryColor: '#24283b',
+            tertiaryColor: '#1f2335',
+            textColor: '#c0caf5',
+            mainBkg: '#24283b',
+            nodeBorder: '#7aa2f7',
+            clusterBkg: '#1f2335',
+            clusterBorder: '#3b4261',
+            titleColor: '#7aa2f7',
+            edgeLabelBackground: '#24283b',
+            actorTextColor: '#c0caf5',
+            actorBorder: '#7aa2f7',
+            actorBkg: '#24283b',
+            signalColor: '#c0caf5',
+            signalTextColor: '#c0caf5',
+            labelBoxBkgColor: '#24283b',
+            labelBoxBorderColor: '#3b4261',
+            labelTextColor: '#c0caf5',
+            loopTextColor: '#c0caf5',
+            activationBorderColor: '#7aa2f7',
+            activationBkgColor: '#3b4261',
+            sequenceNumberColor: '#1a1b26',
+            noteBkgColor: '#1f2335',
+            noteTextColor: '#a9b1d6',
+            noteBorderColor: '#3b4261',
+            classText: '#c0caf5',
+            classColor: '#24283b',
+            classBorder: '#7aa2f7'
+        },
+        flowchart: {
+            htmlLabels: true,
+            curve: 'basis'
+        },
+        sequence: {
+            diagramMarginX: 20,
+            diagramMarginY: 20,
+            actorMargin: 80,
+            width: 180,
+            height: 50,
+            boxMargin: 10,
+            boxTextMargin: 5,
+            noteMargin: 10,
+            messageMargin: 35,
+            mirrorActors: true,
+            useMaxWidth: true
+        }
+    });
+</script>
+
+</body>
+</html>

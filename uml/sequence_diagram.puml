@@ -1,0 +1,132 @@
+@startuml sequence_diagram
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam participantBackgroundColor #F6F8FA
+skinparam participantBorderColor #0969DA
+skinparam participantFontColor #1F2328
+skinparam arrowColor #57606A
+skinparam noteBackgroundColor #FFF8C5
+skinparam noteBorderColor #E3B341
+skinparam noteFontColor #1F2328
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 150
+
+title 四层权限管道 - 时序图 (Sequence Diagram)\n三种典型决策路径
+
+actor "调用方" as Caller #F6F8FA
+participant "PermissionPipeline" as PP #F6F8FA
+participant "Layer1\nRuleMatcher" as L1 #DDF4FF
+participant "Layer2\nBashClassifier" as L2 #FFF8C5
+participant "Layer3\nTranscriptClassifier" as L3 #FBEFFF
+participant "Layer4\nModelSafety" as L4 #FFEFF0
+
+== 场景 A: 第一层快速命中 (Read/Grep 等只读操作) ==
+
+Caller -> PP : check(ToolCall, history)
+activate PP
+
+PP -> L1 : decide(tool_call, history)
+activate L1
+note right of L1
+  fnmatch 通配符匹配
+  deny 优先于 allow
+end note
+L1 --> PP : **ALLOW** (命中允许规则)
+deactivate L1
+
+PP --> Caller : PipelineResult(ALLOW, 0.5ms)
+deactivate PP
+
+note over Caller, L1
+  管道在第一层终止，不再执行后续层
+end note
+
+== 场景 B: 第二层拦截危险操作 (force push / rm -rf 等) ==
+
+Caller -> PP : check(ToolCall, history)
+activate PP
+
+PP -> L1 : decide()
+activate L1
+L1 --> PP : PASS (未匹配任何规则)
+deactivate L1
+
+note over PP : PASS → 继续下一层
+
+PP -> L2 : decide()
+activate L2
+note right of L2
+  仅检查 Bash 工具
+  22+ 预编译正则模式
+end note
+L2 --> PP : **DENY** (检测到危险模式)
+deactivate L2
+
+PP --> Caller : PipelineResult(DENY, 3ms)
+deactivate PP
+
+note over Caller, L2
+  管道在第二层终止，第三/四层不执行
+end note
+
+== 场景 C: 四层全部传递，模型最终判定 ==
+
+Caller -> PP : check(ToolCall, history)
+activate PP
+
+PP -> L1 : decide()
+L1 --> PP : PASS
+
+PP -> L2 : decide()
+L2 --> PP : PASS
+
+PP -> L3 : decide()
+activate L3
+note right of L3
+  检查安全/危险信号
+  只读操作直接 ALLOW
+  非只读但无明确信号 → PASS
+end note
+L3 --> PP : PASS (上下文信息不足)
+deactivate L3
+
+PP -> L4 : decide()
+activate L4
+note right of L4
+  模拟 LLM API 调用 (50~200ms)
+  计算风险评分:
+    命令关键字 +0.3
+    危险目标路径 +0.25
+    强制标志 +0.2
+    危险上下文 +0.15
+    score >= 0.5 → DENY
+    score < 0.5 → ALLOW
+end note
+L4 --> PP : **ALLOW** (score=0.25)
+deactivate L4
+
+PP --> Caller : PipelineResult(ALLOW, 120ms)
+deactivate PP
+
+note over Caller, L4
+  **若四层均 PASS → 默认 DENY (安全优先原则)**
+end note
+
+legend right
+  |= 图例 |= 说明 |
+  | <color:#0969DA>━━▶</color> | 实线箭头 = 请求/调用 |
+  | <color:#1A7F37>━━◀</color> | 绿色返回 = ALLOW |
+  | <color:#CF222E>━━◀</color> | 红色返回 = DENY |
+  | <color:#BF8700>━━◀</color> | 黄色返回 = PASS (传递到下一层) |
+  |= 参与者颜色 |= 层级 |
+  | <color:#0969DA>■</color> Layer1 | RuleMatcher (规则匹配, <1ms) |
+  | <color:#BF8700>■</color> Layer2 | BashClassifier (危险命令检测, ~1ms) |
+  | <color:#8250DF>■</color> Layer3 | TranscriptClassifier (上下文分析, ~5ms) |
+  | <color:#CF222E>■</color> Layer4 | ModelSafety (模型安全分类, 50~200ms) |
+  |= 决策语义 | |
+  | ALLOW | 安全，允许执行，管道终止 |
+  | DENY | 危险，拒绝执行，管道终止 |
+  | PASS | 当前层无法判定，交给下一层 |
+endlegend
+
+@enduml

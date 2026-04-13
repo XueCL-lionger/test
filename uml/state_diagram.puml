@@ -1,0 +1,140 @@
+@startuml state_diagram
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam stateBackgroundColor #F6F8FA
+skinparam stateBorderColor #D0D7DE
+skinparam stateFontColor #1F2328
+skinparam arrowColor #57606A
+skinparam noteBackgroundColor #FFF8C5
+skinparam noteBorderColor #E3B341
+skinparam noteFontColor #1F2328
+
+title 四层权限管道 - 状态图 (State Diagram)\n一个 ToolCall 在管道中的生命周期
+
+[*] --> PendingCheck : 调用方发起 check()
+
+state "四层递进决策管道" as Pipeline {
+
+    state "第一层: RuleMatcher" as Layer1 {
+        [*] --> MatchDeny
+        MatchDeny : 检查 deny 规则
+        state "命中拒绝规则" as Denied_L1 #FFEFF0
+        MatchDeny --> Denied_L1 : fnmatch 匹配
+        MatchDeny --> MatchAllow : 未命中
+        state "命中允许规则" as Allowed_L1 #DAFBE1
+        MatchAllow : 检查 allow 规则
+        MatchAllow --> Allowed_L1 : fnmatch 匹配
+        MatchAllow --> Passed_L1 : 未命中
+        Passed_L1 : PASS: 无规则匹配
+    }
+
+    state "第二层: BashClassifier" as Layer2 {
+        [*] --> CheckBash
+        CheckBash : 是否为 Bash 工具?
+        CheckBash --> Skip_L2 : 非 Bash
+        state "跳过" as Skip_L2 #F6F8FA
+        CheckBash --> ScanPatterns : 是 Bash
+        ScanPatterns : 扫描 22+ 正则模式
+        state "检测到危险模式" as Denied_L2 #FFEFF0
+        ScanPatterns --> Denied_L2 : 匹配
+        ScanPatterns --> Passed_L2 : 无匹配
+        Passed_L2 : PASS: 安全命令
+    }
+
+    state "第三层: TranscriptClassifier" as Layer3 {
+        [*] --> CheckReadOnly
+        CheckReadOnly : 是否为只读操作?
+        state "只读操作放行" as Allowed_L3 #DAFBE1
+        CheckReadOnly --> Allowed_L3 : 是
+        CheckReadOnly --> ScanContext : 否
+        ScanContext : 分析对话上下文信号
+        state "危险信号+修改操作" as Denied_L3 #FFEFF0
+        state "安全信号+修改操作" as Allowed_L3b #DAFBE1
+        ScanContext --> Denied_L3 : 生产环境/线上/敏感
+        ScanContext --> Allowed_L3b : 测试环境/sandbox/debug
+        ScanContext --> Passed_L3 : 信息不足
+        Passed_L3 : PASS: 无法判断
+    }
+
+    state "第四层: ModelSafety" as Layer4 {
+        [*] --> SimulateAPI
+        SimulateAPI : 模拟 LLM 调用 (50~200ms)
+        SimulateAPI --> CalcScore
+        CalcScore : 计算 risk_score
+        CalcScore : 命令关键字 +0.3
+        CalcScore : 危险路径 +0.25
+        CalcScore : 强制标志 +0.2
+        CalcScore : 危险上下文 +0.15
+        state "高风险拒绝" as Denied_L4 #FFEFF0
+        state "低风险放行" as Allowed_L4 #DAFBE1
+        CalcScore --> Denied_L4 : score >= 0.5
+        CalcScore --> Allowed_L4 : score < 0.5
+    }
+}
+
+Denied_L1 --> FinalDeny
+Allowed_L1 --> FinalAllow
+
+Passed_L1 --> Layer2
+Skip_L2 --> Layer3
+Denied_L2 --> FinalDeny
+Passed_L2 --> Layer3
+
+Denied_L3 --> FinalDeny
+Allowed_L3 --> FinalAllow
+Allowed_L3b --> FinalAllow
+Passed_L3 --> Layer4
+
+Denied_L4 --> FinalDeny
+Allowed_L4 --> FinalAllow
+
+state "最终拒绝" as FinalDeny #FFEFF0 {
+    DENY : 决策结果: DENY
+    DENY : 由最快命中的层返回
+}
+state "最终允许" as FinalAllow #DAFBE1 {
+    ALLOW : 决策结果: ALLOW
+    ALLOW : 由最快命中的层返回
+}
+
+state "默认拒绝" as DefaultDeny #FFEFF0 {
+    DEFAULT : 四层均 PASS
+    DEFAULT : 安全起见自动 DENY
+}
+
+Passed_L3 --> DefaultDeny : 兜底机制
+
+FinalDeny --> Logged : 记录日志
+FinalAllow --> Logged : 记录日志
+DefaultDeny --> Logged : 记录日志
+
+Logged : 写入 decision_log\n计算总延迟
+Logged --> [*] : 返回 PipelineResult
+
+note right of Pipeline
+  **短路机制**
+  任意一层返回 ALLOW 或 DENY
+  管道立即终止，后续层不执行
+  层级越靠前速度越快:
+  Layer1 <1ms → Layer2 ~1ms
+  → Layer3 ~5ms → Layer4 50~200ms
+end note
+
+legend right
+  |= 图例 |= 说明 |
+  | <color:#1A7F37>■</color> | 绿色状态 = ALLOW (允许放行) |
+  | <color:#CF222E>■</color> | 红色状态 = DENY (拒绝) |
+  | <color:#F6F8FA>■</color> | 灰色状态 = 中间状态 / PASS |
+  | <color:#57606A>━━▶</color> | 箭头 = 状态转换 |
+  | <color:#1F2328>●</color> | 实心圆 = 起始状态 |
+  | <color:#1F2328>◉</color> | 双圈圆 = 终止状态 |
+  |= 状态类型 | |
+  | 矩形 | 普通处理状态 |
+  | 嵌套矩形 | 复合状态 (包含子状态) |
+  |= 转换标签 | |
+  | fnmatch 匹配 | 规则命中触发 |
+  | 匹配 / 未匹配 | 正则模式扫描结果 |
+  | score >= 0.5 | 模型风险评分阈值 |
+endlegend
+
+@enduml

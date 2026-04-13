@@ -1,0 +1,117 @@
+@startuml component_diagram
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam componentBackgroundColor #F6F8FA
+skinparam componentBorderColor #D0D7DE
+skinparam componentFontColor #1F2328
+skinparam interfaceBackgroundColor #FFFFFF
+skinparam interfaceBorderColor #0969DA
+skinparam arrowColor #57606A
+skinparam noteBackgroundColor #FFF8C5
+skinparam noteBorderColor #E3B341
+skinparam noteFontColor #1F2328
+skinparam packageBackgroundColor #FFFFFF
+skinparam packageBorderColor #D0D7DE
+
+title 四层权限管道 - 组件图 (Component Diagram)
+
+package "permission_pipeline.py" as Package #F6F8FA {
+
+    package "数据模型层" as DataLayer #FFFFFF {
+        component "Decision\n<<enum>>" as Decision
+        component "RiskLevel\n<<enum>>" as RiskLevel
+        component "ToolCall\n<<dataclass>>" as ToolCall
+        component "DecisionResult\n<<dataclass>>" as DecisionResult
+        component "PipelineResult\n<<dataclass>>" as PipelineResult
+    }
+
+    package "分类器层" as ClassifierLayer #FFFFFF {
+        interface "BaseClassifier\n<<abstract>>" as IClassifier {
+            + decide(tool_call, history): DecisionResult
+            + layer_name: str
+        }
+
+        component "RuleMatcher\n第一层: 规则匹配\n<1ms" as RM #DDF4FF
+        component "BashClassifier\n第二层: Bash分类\n~1ms" as BC #FFF8C5
+        component "TranscriptClassifier\n第三层: 上下文分析\n~5ms" as TC #FBEFFF
+        component "ModelSafetyClassifier\n第四层: 模型安全\n50~200ms" as MS #FFEFF0
+
+        RM .up.|> IClassifier
+        BC .up.|> IClassifier
+        TC .up.|> IClassifier
+        MS .up.|> IClassifier
+    }
+
+    package "管道编排层" as PipelineLayer #FFFFFF {
+        component "PermissionPipeline\n管道编排器" as PP {
+            + layers: list<BaseClassifier>
+            + check(): PipelineResult
+            + add_layer() / remove_layer()
+            + get_statistics()
+        }
+    }
+}
+
+' 外部调用方
+actor "Claude Code\n工具调用" as Caller
+
+' 关系
+Caller --> PP : check(tool_call, history)
+PP --> IClassifier : 遍历调用 layers[]
+PP ..> PipelineResult : 创建
+IClassifier ..> DecisionResult : 创建
+
+PipelineResult --> ToolCall : 包含
+PipelineResult --> DecisionResult : 包含
+ToolCall --> RiskLevel : 引用
+DecisionResult --> Decision : 引用
+
+note left of RM
+  用户预配置的 allow/deny 规则
+  fnmatch 通配符匹配
+  deny 优先于 allow
+end note
+
+note left of BC
+  8 大类 22+ 正则模式:
+  - destructive_delete
+  - force_git
+  - production_deploy
+  - database_destructive
+  - permission_change
+  - network_sensitive
+  - system_modify
+  - credential_exposure
+end note
+
+note right of TC
+  上下文信号:
+  安全: 测试环境/sandbox/debug
+  危险: 生产环境/线上/敏感
+end note
+
+note right of MS
+  模拟 LLM 风险评分:
+  score >= 0.5 → DENY
+  score < 0.5 → ALLOW
+end note
+
+legend right
+  |= 图例 |= 说明 |
+  | <color:#0969DA>□</color> | 组件 (Component) |
+  | <color:#0969DA>○</color> | 接口 (Interface) |
+  | <color:#57606A>━━▶</color> | 实线箭头 = 直接依赖 |
+  | <color:#BF8700>┈┈▶</color> | 虚线箭头 = 创建/间接依赖 |
+  | <color:#BF8700>┈┈▷</color> | 虚线三角 = 实现接口 |
+  |= 分层架构 |= |
+  | 数据模型层 | Decision, RiskLevel, ToolCall, DecisionResult, PipelineResult |
+  | 分类器层 | RuleMatcher, BashClassifier, TranscriptClassifier, ModelSafetyClassifier |
+  | 管道编排层 | PermissionPipeline (组合所有分类器) |
+  |= 组件颜色 |= 层级 |
+  | <color:#DDF4FF>■</color> | 第一层: RuleMatcher (<1ms) |
+  | <color:#FFF8C5>■</color> | 第二层: BashClassifier (~1ms) |
+  | <color:#FBEFFF>■</color> | 第三层: TranscriptClassifier (~5ms) |
+  | <color:#FFEFF0>■</color> | 第四层: ModelSafety (50~200ms) |
+endlegend
+
+@enduml

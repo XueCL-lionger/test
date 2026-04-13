@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import py_compile; py_compile.compile\\('permission_pipeline.py', doraise=True\\); print\\('Syntax OK'\\)\")",
+      "Bash(python permission_pipeline.py)",
+      "Bash(python -c \"import graphviz; print\\('graphviz available'\\)\")",
+      "Bash(python -c \"import matplotlib; print\\('matplotlib available'\\)\")",
+      "Bash(where dot:*)",
+      "Bash(pip install:*)",
+      "Bash(python generate_uml.py)",
+      "Bash(gh auth:*)",
+      "Bash(git config:*)"
+    ]
+  }
+}

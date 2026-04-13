@@ -1,0 +1,187 @@
+@startuml class_diagram
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam classBackgroundColor #F6F8FA
+skinparam classBorderColor #D0D7DE
+skinparam classFontColor #1F2328
+skinparam classHeaderBackgroundColor #0969DA
+skinparam classHeaderFontColor #FFFFFF
+skinparam classAttributeFontColor #1F2328
+skinparam abstractClassBackgroundColor #F6F8FA
+skinparam abstractClassBorderColor #0969DA
+skinparam abstractClassHeaderBackgroundColor #0969DA
+skinparam abstractClassHeaderFontColor #FFFFFF
+skinparam enumBackgroundColor #F6F8FA
+skinparam enumBorderColor #8250DF
+skinparam enumHeaderBackgroundColor #8250DF
+skinparam enumHeaderFontColor #FFFFFF
+skinparam arrowColor #57606A
+skinparam defaultFontSize 12
+skinparam classFontSize 13
+skinparam packageFontSize 14
+skinparam noteFontSize 11
+skinparam packageBorderColor #D0D7DE
+skinparam packageBackgroundColor #FFFFFF
+
+title 四层权限管道 - 类图 (Class Diagram)
+
+package "枚举类型" #F6F8FA {
+    enum Decision {
+        ALLOW = allow
+        DENY = deny
+        PASS = pass
+    }
+
+    enum RiskLevel {
+        LOW = low
+        MEDIUM = medium
+        HIGH = high
+        CRITICAL = critical
+    }
+}
+
+package "数据结构" #F6F8FA {
+    class ToolCall <<dataclass>> {
+        + name: str
+        + command: str
+        + risk_level: RiskLevel = LOW
+        + MAX_COMMAND_LENGTH: int = 100_000
+        + __post_init__(): None
+        + is_read_only(): bool
+        + is_destructive(): bool
+    }
+
+    class DecisionResult <<dataclass>> {
+        + layer: str
+        + decision: Decision
+        + reason: str = ""
+        + latency_ms: float = 0.0
+    }
+
+    class PipelineResult <<dataclass>> {
+        + tool_call: ToolCall
+        + layers_checked: list<DecisionResult>
+        + final_decision: Decision = PASS
+        + total_latency_ms: float = 0.0
+        + reason: str = ""
+    }
+}
+
+package "分类器 (Classifiers)" #F6F8FA {
+
+    abstract class BaseClassifier <<abstract>> {
+        + {abstract} layer_name: str
+        + decide(tool_call: ToolCall, conversation_history: list<str>|None): DecisionResult
+        # {abstract} _do_decide(tool_call: ToolCall, context: str): DecisionResult
+    }
+
+    class RuleMatcher {
+        - allow_rules: list<str>
+        - deny_rules: list<str>
+        + layer_name: str
+        # _do_decide(tool_call, context): DecisionResult
+        .. 说明 ..
+        fnmatch 通配符匹配
+        deny 优先于 allow
+        延迟: 亚毫秒
+    }
+
+    class BashClassifier {
+        - _RAW_PATTERNS: dict<str, list<str>>
+        - _COMPILED_PATTERNS: list<tuple<str, Pattern>>
+        + layer_name: str
+        # _do_decide(tool_call, context): DecisionResult
+        - _ensure_compiled(): list
+        .. 说明 ..
+        22+ 预编译正则模式
+        仅检查 Bash 工具
+        延迟: ~1ms
+    }
+
+    class TranscriptClassifier {
+        - _SAFE_CONTEXTS: tuple<str>
+        - _DANGEROUS_CONTEXTS: tuple<str>
+        + layer_name: str
+        # _do_decide(tool_call, context): DecisionResult
+        .. 说明 ..
+        对话上下文信号检测
+        只读操作直接 ALLOW
+        延迟: ~5ms
+    }
+
+    class ModelSafetyClassifier {
+        + HIGH_RISK_COMMANDS: frozenset<str>
+        + HIGH_RISK_TARGETS: frozenset<str>
+        - _FORCE_PATTERN: Pattern
+        - _DANGER_CONTEXT_KEYWORDS: tuple<str>
+        + layer_name: str
+        # _do_decide(tool_call, context): DecisionResult
+        .. 说明 ..
+        模拟 LLM 风险评分
+        score >= 0.5 则 DENY
+        延迟: 50~200ms
+    }
+}
+
+package "管道编排器" #F6F8FA {
+    class PermissionPipeline {
+        + layers: list<BaseClassifier>
+        + decision_log: list<PipelineResult>
+        + __init__()
+        + add_layer(classifier: BaseClassifier, index: int|None): void
+        + remove_layer(layer_name: str): void
+        + check(tool_call: ToolCall, conversation_history: list<str>|None): PipelineResult
+        + print_decision(result: PipelineResult): void
+        + get_statistics(): dict
+    }
+}
+
+' 继承关系
+BaseClassifier <|-- RuleMatcher : 继承
+BaseClassifier <|-- BashClassifier : 继承
+BaseClassifier <|-- TranscriptClassifier : 继承
+BaseClassifier <|-- ModelSafetyClassifier : 继承
+
+' 组合关系
+PermissionPipeline *-- BaseClassifier : layers 包含 1..4
+
+' 关联关系
+PipelineResult --> ToolCall : tool_call
+PipelineResult *-- DecisionResult : layers_checked 0..4
+ToolCall --> RiskLevel : risk_level
+DecisionResult --> Decision : decision
+PipelineResult --> Decision : final_decision
+
+' 依赖关系
+BaseClassifier ..> DecisionResult : 创建
+BaseClassifier ..> ToolCall : 使用
+
+note right of PermissionPipeline
+  四层递进式决策管道:
+  Layer1 -> Layer2 -> Layer3 -> Layer4
+  由快到慢，短路返回
+  默认 DENY (安全优先)
+end note
+
+note right of BaseClassifier
+  模板方法模式:
+  decide() 自动计时 + 异常兜底
+  子类只需实现 _do_decide()
+end note
+
+legend right
+  |= 图例 |= 说明 |
+  | <color:#0969DA>━━◁</color> | 实线空心三角 = 继承 (Inheritance) |
+  | <color:#0969DA>━━◆</color> | 实线实心菱形 = 组合 (Composition) |
+  | <color:#1A7F37>━━▶</color> | 实线箭头 = 关联 (Association) |
+  | <color:#BF8700>┈┈▶</color> | 虚线箭头 = 依赖 (Dependency) |
+  |= 颜色 |= 含义 |
+  | <color:#0969DA>■</color> | 蓝色 = 抽象基类 / 第一层 |
+  | <color:#BF8700>■</color> | 黄色 = 第二层 Bash 分类器 |
+  | <color:#8250DF>■</color> | 紫色 = 枚举类型 / 第三层 |
+  | <color:#CF222E>■</color> | 红色 = 第四层模型安全 |
+  | <color:#1A7F37>■</color> | 绿色 = 数据结构 |
+  | <color:#0550AE>■</color> | 深蓝 = 管道编排器 |
+endlegend
+
+@enduml
