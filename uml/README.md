@@ -11,6 +11,7 @@
 | `flowchart.puml` | 流程图 | 四层递进决策逻辑，含短路机制和默认拒绝兜底 |
 | `state_diagram.puml` | 状态图 | ToolCall 请求在管道中的完整生命周期状态变迁 |
 | `component_diagram.puml` | 组件图 | 数据模型层、分类器层、管道编排层的分层架构 |
+| `call_graph.puml` | **函数调用图** | 所有函数/方法的调用关系，标注入口函数 `main()` 和短路机制 |
 
 ## 预览方式
 

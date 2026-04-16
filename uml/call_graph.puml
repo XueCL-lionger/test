@@ -1,0 +1,165 @@
+@startuml call_graph
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Segoe UI,Microsoft YaHei,sans-serif"
+skinparam defaultFontSize 12
+skinparam rectangleBorderColor #D0D7DE
+skinparam rectangleFontSize 12
+skinparam noteBorderColor #D0D7DE
+skinparam noteBackgroundColor #FFF8C5
+
+skinparam arrowThickness 1.5
+skinparam arrowColor #0969DA
+
+title 函数调用图 (Function Call Graph)\npermission_pipeline.py
+
+' ── 图例 ──
+legend right
+  |= 线型 |= 含义 |
+  | <color:#0969DA>─────►</color> | 实线：直接函数调用 (Direct Call) |
+  | <color:#0969DA>- - - ►</color> | 虚线：多态分派 / 虚调用 (Polymorphic Dispatch) |
+  |= 颜色 |= 含义 |
+  |<#DAFBE1>|  入口函数 |
+  |<#DDF4FF>|  管道编排 |
+  |<#FFF8C5>|  第一层 RuleMatcher |
+  |<#FBEFFF>|  第二层 BashClassifier |
+  |<#E8F5E9>|  第三层 TranscriptClassifier |
+  |<#FFEFF0>|  第四层 ModelSafety |
+  |<#F6F8FA>|  基础设施 / 工具方法 |
+endlegend
+
+' ══════════════════════════════════════════════════
+' 第一行：入口
+' ══════════════════════════════════════════════════
+
+rectangle "**main()**\n入口函数" as main #DAFBE1
+
+' ══════════════════════════════════════════════════
+' 第二行：初始化（横向排列）
+' ══════════════════════════════════════════════════
+
+rectangle "PermissionPipeline\n__init__()" as PP_init #DDF4FF
+
+together {
+  rectangle "RuleMatcher\n__init__()" as RM_init #FFF8C5
+  rectangle "BashClassifier\n（无自定义 __init__）" as BC_init #FBEFFF
+  rectangle "TranscriptClassifier\n（无自定义 __init__）" as TC_init #E8F5E9
+  rectangle "ModelSafetyClassifier\n（无自定义 __init__）" as MS_init #FFEFF0
+}
+
+' ══════════════════════════════════════════════════
+' 第三行：循环体入口
+' ══════════════════════════════════════════════════
+
+rectangle "ToolCall(name, command)" as TC_new #F6F8FA
+rectangle "ToolCall\n__post_init__()\n输入校验" as TC_validate #F6F8FA
+
+' ══════════════════════════════════════════════════
+' 第四行：核心管道
+' ══════════════════════════════════════════════════
+
+rectangle "PermissionPipeline\ncheck()\n── 核心管道方法 ──" as PP_check #DDF4FF
+
+rectangle "BaseClassifier\ndecide()\n── 模板方法 ──" as BC_decide #F6F8FA
+
+note right of BC_decide
+  模板方法统一处理：
+  1. 计时 (perf_counter)
+  2. 上下文预计算（拼接+小写化）
+  3. 异常兜底 → PASS
+  4. 注入 latency_ms
+end note
+
+' ══════════════════════════════════════════════════
+' 第五行：四层分类器（横向排列）
+' ══════════════════════════════════════════════════
+
+together {
+  rectangle "RuleMatcher\n_do_decide()" as RM #FFF8C5
+  rectangle "BashClassifier\n_do_decide()" as BC #FBEFFF
+  rectangle "TranscriptClassifier\n_do_decide()" as TC #E8F5E9
+  rectangle "ModelSafetyClassifier\n_do_decide()" as MS #FFEFF0
+}
+
+' ── 各层内部调用 ──
+
+together {
+  rectangle "fnmatch.fnmatch()\ndeny → allow" as RM_fn #FFF8C5
+  rectangle "_ensure_compiled()\n→ re.compile() ×22\n→ search()" as BC_re #FBEFFF
+  rectangle "is_read_only()\nis_destructive()\n信号匹配" as TC_sig #E8F5E9
+  rectangle "hash() → sleep()\n4维风险评分\n→ _FORCE_PATTERN" as MS_score #FFEFF0
+}
+
+' ══════════════════════════════════════════════════
+' 第六行：短路判断
+' ══════════════════════════════════════════════════
+
+rectangle "短路判断\nALLOW/DENY → break\nPASS → 下一层\n全PASS → 默认DENY" as short_circuit #DDF4FF
+
+' ══════════════════════════════════════════════════
+' 第七行：输出
+' ══════════════════════════════════════════════════
+
+together {
+  rectangle "PermissionPipeline\nprint_decision()" as PP_print #DDF4FF
+  rectangle "PermissionPipeline\nget_statistics()" as PP_stats #DDF4FF
+}
+
+' ══════════════════════════════════════════════════
+' 连线：实线 = 直接调用，虚线 = 多态分派
+' ══════════════════════════════════════════════════
+
+' ── main → 初始化 ──
+main -[bold,#0969DA]down-> PP_init : "① 创建管道"
+
+PP_init -down-> RM_init : "layers[0]"
+PP_init -down-> BC_init : "layers[1]"
+PP_init -down-> TC_init : "layers[2]"
+PP_init -down-> MS_init : "layers[3]"
+
+' ── main → 循环体 ──
+main -[bold,#0969DA]down-> TC_new : "② 构造测试用例（×35）"
+TC_new -down-> TC_validate : "__post_init__"
+
+' ── main → check ──
+main -[bold,#0969DA]down-> PP_check : "③ 执行检查"
+PP_check -down-> BC_decide : "遍历 layers"
+
+' ── decide → 四层（虚线 = 多态分派）──
+BC_decide -.down.-> RM : "层1 分派"
+BC_decide -.down.-> BC : "层2 分派"
+BC_decide -.down.-> TC : "层3 分派"
+BC_decide -.down.-> MS : "层4 分派"
+
+' ── 各层内部调用（实线 = 直接调用）──
+RM -down-> RM_fn
+BC -down-> BC_re
+TC -down-> TC_sig
+MS -down-> MS_score
+
+' ── 短路 ──
+PP_check -down-> short_circuit : "每层返回后判断"
+
+' ── 输出 ──
+main -[bold,#0969DA]down-> PP_print : "④ 打印决策"
+main -[bold,#0969DA]down-> PP_stats : "⑤ 输出统计"
+
+' ══════════════════════════════════════════════════
+' 隐藏线：用于辅助布局（控制横向间距）
+' ══════════════════════════════════════════════════
+
+RM_init -[hidden]right- BC_init
+BC_init -[hidden]right- TC_init
+TC_init -[hidden]right- MS_init
+
+RM -[hidden]right- BC
+BC -[hidden]right- TC
+TC -[hidden]right- MS
+
+RM_fn -[hidden]right- BC_re
+BC_re -[hidden]right- TC_sig
+TC_sig -[hidden]right- MS_score
+
+PP_print -[hidden]right- PP_stats
+
+@enduml
